@@ -1,0 +1,14 @@
+{
+  "name": "com.sorane.tansu",
+  "displayName": "Tansu",
+  "author": { "name": "Sorane" },
+  "version": "0.1.0",
+  "unity": "6000.0",
+  "description": "Unity向けの、型付きキー・アトミック書き込み・バックアップに対応したセーブライブラリ",
+  "keywords": [ "Save", "SaveData", "Unity" ],
+  "license": "MIT",
+  "category": "Data",
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}
