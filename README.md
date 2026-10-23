@@ -25,6 +25,7 @@ Unity 向けの、シンプルで壊れにくいセーブライブラリです�
 - **失敗を見逃さない**：ファイルの読み書きの失敗は例外にせず、結果を戻り値で返し、コンソールにも出力します。`await` せずに呼んでも、失敗が消えることはありません。
 - **メインスレッドを止めない**：ファイルの読み書きは別スレッドで行います。メインスレッド以外からの呼び出しは、その場で検出します。
 - **知らないキーを消さない**：今のコードで使っていないキーも、そのまま保持して書き戻します。
+- **役割で分けたインターフェース**：値の読み書きだけを行う `ISaveValues` と、保存ファイルの読み込み・書き込みも行う `ISaveStore` を用意しています。ゲームの各システムには `ISaveValues` だけを渡すことで、意図しない保存や初期化を型で防げます。
 
 ## 動作環境
 
@@ -138,21 +139,56 @@ public sealed class CoinCounter : MonoBehaviour
 - 同じファイルに対して `SaveStore` を複数作らないでください。互いの変更を上書きし合います。
 - ファイル名を分ければ、複数の `SaveStore` を使い分けられます（[保存ファイルを分ける](#保存ファイルを分ける)）。
 
+### インターフェースで受け取る
+
+`SaveStore` は、役割の異なる 2 つのインターフェースを実装しています。呼び出す側は、必要な操作だけを持つインターフェースで受け取ってください。
+
+| インターフェース | できること | 渡す相手 |
+|---|---|---|
+| `ISaveValues` | 値の読み書き（`Get`・`Set`・`Has`・`Remove`） | プレイヤー・インベントリ・設定画面など、ゲームの各システム |
+| `ISaveStore` | `ISaveValues` の操作に加え、読み込み・書き込み・初期化（`LoadAsync`・`FlushAsync`・`Flush`・`StartFresh`） | 起動処理や、保存のタイミングを管理する役 |
+
+`ISaveStore` は `ISaveValues` を継承しているため、`ISaveStore` を持っていれば値の読み書きもできます。
+ゲームの各システムに `ISaveValues` だけを渡しておけば、どこかで誤って `StartFresh` を呼んで全データを消す、といったことが起きません。また、テストなどで差し替えやすくなります（[テストで差し替える](#テストで差し替える)）。
+
 ### 方法 1：DI コンテナで渡す
 
-VContainer の場合、`SaveStore` をインスタンスとして登録すると、使う側にコンストラクタなどで注入できます。
+VContainer の場合、1 つの `SaveStore` を 2 つのインターフェースとして登録すると、使う側にコンストラクタなどで注入できます。
 
 ```csharp
 public sealed class GameLifetimeScope : LifetimeScope
 {
     protected override void Configure(IContainerBuilder builder)
     {
-        builder.RegisterInstance(new SaveStore());
+        builder.RegisterInstance(new SaveStore())
+            .As<ISaveValues>()
+            .As<ISaveStore>();
     }
 }
 ```
 
-`LoadAsync` は、起動時の処理などで一度だけ呼び、完了を待ってから値を読み書きします。
+```csharp
+// ゲームの各システムは、値の読み書きだけを受け取る
+public sealed class CoinWallet
+{
+    private readonly ISaveValues _saveValues;
+
+
+    public CoinWallet(ISaveValues saveValues)
+    {
+        _saveValues = saveValues;
+    }
+
+
+    public void Add(int amount)
+    {
+        int coins = _saveValues.Get(GameSaveValues.Coins);
+        _saveValues.Set(GameSaveValues.Coins, coins + amount);
+    }
+}
+```
+
+`LoadAsync` は、`ISaveStore` を受け取った起動処理などで一度だけ呼び、完了を待ってから値を読み書きします。
 シーンをまたいで使う場合は、プロジェクト全体の親となる LifetimeScope に登録します。
 
 ### 方法 2：静的なプロパティで公開する
@@ -165,7 +201,7 @@ using Tansu;
 
 public static class GameSave
 {
-    public static SaveStore Store { get; private set; }
+    public static ISaveStore Store { get; private set; }
 
 
     // タイトル画面など、最初に一度だけ通る場所から呼ぶ
@@ -304,6 +340,56 @@ if (store.Has(OldCoins))
 
 - MonoBehaviour や ScriptableObject は保存できません。保存したい値だけを、普通のクラスにまとめてください。
 - 自作のクラスのプロパティには、`[JsonProperty("name")]` で保存時の名前を付けておくと、プロパティ名を変えても保存済みのデータを読めます。
+
+### テストで差し替える
+
+値を読み書きする側を `ISaveValues` で受け取っておくと、テストではファイルを使わない実装に差し替えられます。
+
+```csharp
+using System.Collections.Generic;
+using Tansu;
+
+// テスト用の簡易な実装。値をメモリ上に持つだけで、ファイルには保存しない
+public sealed class InMemorySaveValues : ISaveValues
+{
+    private readonly Dictionary<string, object> _values = new();
+
+
+    public T Get<T>(SaveValue<T> saveValue)
+    {
+        return _values.TryGetValue(saveValue.Key, out object value) ? (T)value : saveValue.DefaultValue;
+    }
+
+
+    public void Set<T>(SaveValue<T> saveValue, T value)
+    {
+        _values[saveValue.Key] = value;
+    }
+
+
+    public bool Has<T>(SaveValue<T> saveValue)
+    {
+        return _values.ContainsKey(saveValue.Key);
+    }
+
+
+    public void Remove<T>(SaveValue<T> saveValue)
+    {
+        _values.Remove(saveValue.Key);
+    }
+}
+```
+
+```csharp
+InMemorySaveValues saveValues = new InMemorySaveValues();
+CoinWallet wallet = new CoinWallet(saveValues);
+
+wallet.Add(10);
+
+Assert.AreEqual(10, saveValues.Get(GameSaveValues.Coins));
+```
+
+この簡易な実装は、`SaveStore` と違って値を作り直さずにそのまま返します。List などの中身を変えると、保存されている値も変わる点に注意してください。
 
 ---
 
