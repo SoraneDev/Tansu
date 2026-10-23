@@ -8,5 +8,7 @@
   "keywords": [ "Save", "SaveData", "Unity" ],
   "license": "MIT",
   "category": "Data",
-  "dependencies": {}
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
 }
