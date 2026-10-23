@@ -22,7 +22,7 @@ namespace Tansu
     /// 生成も含め、すべての操作はメインスレッドから行う。ファイルの読み書きだけを内部で別スレッドに任せる。
     /// ファイルの読み書きの失敗は例外にせず、コンソールにエラーを出したうえで戻り値で伝える。
     /// </remarks>
-    public sealed class SaveStore
+    public sealed class SaveStore : ISaveStore
     {
         private const string LogPrefix = "[Tansu]";
 
@@ -57,15 +57,15 @@ namespace Tansu
         public string FilePath { get; }
 
         
-        /// <summary><see cref="LoadAsync"/>が完了したかどうか。</summary>
+        /// <inheritdoc cref="ISaveStore.IsLoaded"/>
         public bool IsLoaded => _loadState == LoadState.Loaded;
 
         
-        /// <summary>ファイルに保存できる状態かどうか。読み込みに失敗した場合はfalseになる。</summary>
+        /// <inheritdoc cref="ISaveStore.CanSave"/>
         public bool CanSave => _canSave;
 
         
-        /// <summary>まだファイルに書き込んでいない変更があるかどうか。</summary>
+        /// <inheritdoc cref="ISaveStore.HasUnsavedChanges"/>
         public bool HasUnsavedChanges => _isDirty;
 
 
@@ -94,15 +94,7 @@ namespace Tansu
         }
 
 
-        /// <summary>
-        /// 保存ファイルを読み込む。最初に一度だけ呼ぶ。
-        /// </summary>
-        /// <remarks>
-        /// 保存ファイルが壊れていれば、バックアップから読み込む。
-        /// 読み込めなかった場合（<see cref="LoadResult.Failed"/>）は、壊れたファイルを上書きしないよう保存を禁止する。
-        /// その状態から始め直すには<see cref="StartFresh"/>を呼ぶ。
-        /// </remarks>
-        /// <returns>読み込み結果。</returns>
+        ///<inheritdoc cref="ISaveStore.LoadAsync"/>
         /// <exception cref="InvalidOperationException">2回以上呼んだ場合、またはメインスレッド以外から呼んだ場合。</exception>
         public Task<LoadResult> LoadAsync()
         {
@@ -119,15 +111,7 @@ namespace Tansu
         }
 
 
-        /// <summary>
-        /// 値を読み込む。まだ一度も保存していなければ、既定値を返す。
-        /// </summary>
-        /// <remarks>
-        /// 返すのは毎回新しく作った値である。Listなどを受け取って中身を変えても、ストアの値は変わらない。
-        /// 変更を反映するには<see cref="Set{T}"/>を呼ぶ。
-        /// 保存されている値を<typeparamref name="T"/>として読めない場合は、警告を出して既定値を返す。
-        /// </remarks>
-        /// <returns>保存されている値。なければ既定値。</returns>
+        /// <inheritdoc cref="ISaveValues.Get"/>
         /// <exception cref="ArgumentNullException"><paramref name="saveValue"/>がnullの場合。</exception>
         /// <exception cref="InvalidOperationException">
         /// 読み込みが完了する前、メインスレッド以外から呼んだ場合、または同じキー名で別の定義を使った場合。
@@ -157,12 +141,7 @@ namespace Tansu
         }
 
 
-        /// <summary>
-        /// 値を書き換える。ファイルには書き込まない。
-        /// </summary>
-        /// <remarks>
-        /// 今と同じ値を設定した場合は、変更として扱わない。
-        /// </remarks>
+        /// <inheritdoc cref="ISaveValues.Set"/>
         /// <exception cref="ArgumentNullException"><paramref name="saveValue"/>がnullの場合。</exception>
         /// <exception cref="InvalidOperationException">
         /// 読み込みが完了する前、メインスレッド以外から呼んだ場合、または同じキー名で別の定義を使った場合。
@@ -187,10 +166,7 @@ namespace Tansu
         }
 
 
-        /// <summary>
-        /// 値が設定されているかどうかを返す。まだファイルに書き込んでいない値も含む。
-        /// </summary>
-        /// <returns>値が設定されていればtrue。<see cref="Get{T}"/>が既定値を返す状態ならfalse。</returns>
+        /// <inheritdoc cref="ISaveValues.Has"/>
         /// <exception cref="ArgumentNullException"><paramref name="saveValue"/>がnullの場合。</exception>
         /// <exception cref="InvalidOperationException">
         /// 読み込みが完了する前、メインスレッド以外から呼んだ場合、または同じキー名で別の定義を使った場合。
@@ -205,9 +181,7 @@ namespace Tansu
         }
 
 
-        /// <summary>
-        /// 値を削除する。以降の<see cref="Get{T}"/>は既定値を返す。ファイルには書き込まない。
-        /// </summary>
+        /// <inheritdoc cref="ISaveValues.Remove"/>
         /// <exception cref="ArgumentNullException"><paramref name="saveValue"/>がnullの場合。</exception>
         /// <exception cref="InvalidOperationException">
         /// 読み込みが完了する前、メインスレッド以外から呼んだ場合、または同じキー名で別の定義を使った場合。
@@ -225,15 +199,7 @@ namespace Tansu
         }
 
 
-        /// <summary>
-        /// 変更をファイルに書き込む。ファイルの書き込みは別スレッドで行う。
-        /// </summary>
-        /// <remarks>
-        /// 書き込みに失敗しても例外は投げず、コンソールにエラーを出して<see cref="FlushResult.Failed"/>を返す。
-        /// そのため、awaitせずに呼び捨てにしても、失敗に気付けなくなることはない。
-        /// 失敗した場合、変更は未保存のまま残り、次の呼び出しで再び書き込みを試みる。
-        /// </remarks>
-        /// <returns>書き込み結果。</returns>
+        /// <inheritdoc cref="ISaveStore.FlushAsync"/>
         /// <exception cref="InvalidOperationException">読み込みが完了する前、またはメインスレッド以外から呼んだ場合。</exception>
         public Task<FlushResult> FlushAsync()
         {
@@ -252,16 +218,7 @@ namespace Tansu
         }
 
 
-        /// <summary>
-        /// 変更をファイルに書き込む。書き込みが終わるまで処理を止める。
-        /// </summary>
-        /// <remarks>
-        /// アプリの終了時など、非同期処理の完了を待てない場面で使う。普段は<see cref="FlushAsync"/>を使う。
-        /// <see cref="FlushAsync"/>の書き込みが進行中の場合は、それが終わるまで待ってから書き込む。
-        /// 書き込みに失敗しても例外は投げず、コンソールにエラーを出して<see cref="FlushResult.Failed"/>を返す。
-        /// 失敗した場合、変更は未保存のまま残り、次の呼び出しで再び書き込みを試みる。
-        /// </remarks>
-        /// <returns>書き込み結果。</returns>
+        /// <inheritdoc cref="ISaveStore.Flush"/>
         /// <exception cref="InvalidOperationException">読み込みが完了する前、またはメインスレッド以外から呼んだ場合。</exception>
         public FlushResult Flush()
         {
@@ -287,12 +244,7 @@ namespace Tansu
         }
 
 
-        /// <summary>
-        /// すべての値を消し、空の状態から始め直す。読み込みに失敗して保存が禁止されている場合も、保存できる状態に戻す。
-        /// </summary>
-        /// <remarks>
-        /// 次の保存で、それまでの保存ファイルは上書きされる。読み込みに失敗したファイルを諦めるときに使う。
-        /// </remarks>
+        /// <inheritdoc cref="ISaveStore.StartFresh"/>
         /// <exception cref="InvalidOperationException">読み込みが完了する前、またはメインスレッド以外から呼んだ場合。</exception>
         public void StartFresh()
         {
