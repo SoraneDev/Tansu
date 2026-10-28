@@ -6,8 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using Tansu.Converters;
-using Tansu.Internal;
 using UnityEngine;
 
 
@@ -17,76 +15,48 @@ namespace Tansu
     /// 値をキーごとに読み書きし、1つのJSONファイルにまとめて保存する。
     /// </summary>
     /// <remarks>
-    /// <see cref="LoadAsync"/>で読み込みを完了させてから、<see cref="Get{T}"/>と<see cref="Set{T}"/>で値を読み書きし、
-    /// <see cref="FlushAsync"/>または<see cref="Flush"/>で変更をまとめてファイルに書き込む。
+    /// <see cref="LoadAsync" />で読み込みを完了させてから、<see cref="Get{T}" />と<see cref="Set{T}" />で値を読み書きし、
+    /// <see cref="FlushAsync" />または<see cref="Flush" />で変更をまとめてファイルに書き込む。
     /// 生成も含め、すべての操作はメインスレッドから行う。ファイルの読み書きだけを内部で別スレッドに任せる。
     /// ファイルの読み書きの失敗は例外にせず、コンソールにエラーを出したうえで戻り値で伝える。
     /// </remarks>
     public sealed class SaveStore : ISaveStore
     {
-        private const string LogPrefix = "[Tansu]";
-
-
         // 同じキー名で別の定義が使われていないかを調べるため、キー名ごとに最初に使われた定義を覚えておく。
         private readonly Dictionary<string, object> _definitions = new();
-
         // ファイルへの書き込みを1つずつ行うためのロック。別スレッドとメインスレッドの書き込みが重ならないようにする。
         private readonly object _writeLock = new();
-
         private readonly JsonSerializer _serializer = CreateSerializer();
-
         // 生成したスレッド（メインスレッド）のID。各操作が正しいスレッドから行われたかを調べるために使う。
         private readonly int _mainThreadId;
-
-
         // すべての値を、キー名ごとにJSONの形で持つ。
         // 型を決めずに持つことで、今のコードが知らないキーも消さずに書き戻せる。
         private JObject _values = new();
-
         private LoadState _loadState = LoadState.NotLoaded;
-        private bool _canSave;
-        private bool _isDirty;
-        
         // 書き込む内容に振る通し番号。古い内容で新しい内容を上書きしないために使う。
         // _snapshotVersionはメインスレッドだけが、_writtenVersionは_writeLockの中だけで読み書きする。
         private long _snapshotVersion;
         private long _writtenVersion;
 
 
-        /// <summary>保存ファイルのフルパス。</summary>
-        public string FilePath { get; }
-
-        
-        /// <inheritdoc cref="ISaveStore.IsLoaded"/>
-        public bool IsLoaded => _loadState == LoadState.Loaded;
-
-        
-        /// <inheritdoc cref="ISaveStore.CanSave"/>
-        public bool CanSave => _canSave;
-
-        
-        /// <inheritdoc cref="ISaveStore.HasUnsavedChanges"/>
-        public bool HasUnsavedChanges => _isDirty;
-
-
         /// <summary>
-        /// <see cref="Application.persistentDataPath"/>の下に保存するストアを作る。メインスレッドから呼ぶ。
+        /// <see cref="Application.persistentDataPath" />の下に保存するストアを作成する。メインスレッドから呼ぶ。
         /// </summary>
         /// <param name="fileName">保存ファイル名。</param>
-        /// <exception cref="ArgumentException"><paramref name="fileName"/>が空、または空白だけの場合。</exception>
+        /// <exception cref="ArgumentException"><paramref name="fileName" />が空、または空白だけの場合。</exception>
         /// <exception cref="InvalidOperationException">メインスレッド以外から呼んだ場合。</exception>
         public SaveStore(string fileName = "save.json")
         {
             if (string.IsNullOrWhiteSpace(fileName))
             {
-                throw new ArgumentException("File name must not be empty.", nameof(fileName));
+                throw new ArgumentException("ファイル名を空にすることはできません。", nameof(fileName));
             }
 
             // Unityのメインスレッドには、awaitの後にメインスレッドへ戻すための仕組み（同期コンテキスト）が必ず設定されている。
             // これがないスレッドで作ると、awaitの後に別のスレッドで値を書き換えてしまうため、ここで止める。
             if (SynchronizationContext.Current == null)
             {
-                throw new InvalidOperationException("SaveStore must be created on the Unity main thread.");
+                throw new InvalidOperationException($"{nameof(SaveStore)} はUnityのメインスレッドで生成してください。");
             }
 
             _mainThreadId = Thread.CurrentThread.ManagedThreadId;
@@ -94,25 +64,43 @@ namespace Tansu
         }
 
 
-        ///<inheritdoc cref="ISaveStore.LoadAsync"/>
+        /// <summary>保存ファイルのフルパス。</summary>
+        public string FilePath { get; }
+
+
+        /// <inheritdoc />
+        public bool IsLoaded => _loadState == LoadState.Loaded;
+
+
+        /// <inheritdoc />
+        public bool CanSave { get; private set; }
+
+
+        /// <inheritdoc />
+        public bool HasUnsavedChanges { get; private set; }
+
+
+        /// <inheritdoc />
         /// <exception cref="InvalidOperationException">2回以上呼んだ場合、またはメインスレッド以外から呼んだ場合。</exception>
         public Task<LoadResult> LoadAsync()
         {
             // 使い方の誤りは、awaitしなくても気付けるよう、Taskを返す前にこの場で例外にする。
-            // （asyncメソッドの中で投げた例外はTaskの中にしまわれ、awaitしないと表に出てこない）
+            // asyncメソッドの中で投げた例外はTaskの中にしまわれ、awaitしないと表に出てこないため。
             ThrowIfNotMainThread();
+
             if (_loadState != LoadState.NotLoaded)
             {
-                throw new InvalidOperationException("LoadAsync can only be called once.");
+                throw new InvalidOperationException($"{nameof(LoadAsync)} は1回だけ呼べます。");
             }
 
             _loadState = LoadState.Loading;
+
             return LoadInBackgroundAsync();
         }
 
 
-        /// <inheritdoc cref="ISaveValues.Get"/>
-        /// <exception cref="ArgumentNullException"><paramref name="saveValue"/>がnullの場合。</exception>
+        /// <inheritdoc />
+        /// <exception cref="ArgumentNullException"><paramref name="saveValue" />がnullの場合。</exception>
         /// <exception cref="InvalidOperationException">
         /// 読み込みが完了する前、メインスレッド以外から呼んだ場合、または同じキー名で別の定義を使った場合。
         /// </exception>
@@ -122,7 +110,7 @@ namespace Tansu
             ThrowIfNotLoaded();
             Register(saveValue);
 
-            if (!_values.TryGetValue(saveValue.Key, out var token))
+            if (!_values.TryGetValue(saveValue.Key, out JToken token))
             {
                 return Copy(saveValue.DefaultValue);
             }
@@ -131,18 +119,20 @@ namespace Tansu
             {
                 return token.ToObject<T>(_serializer);
             }
-            catch (Exception e) when (IsConversionError(e))
+            catch (Exception exception) when (IsConversionError(exception))
             {
                 // 保存されている値の型が合わない（型を変更した、ファイルを手で編集した、など）。
                 // ゲームを止めないよう、警告を出して既定値を返す。
-                Debug.LogWarning($"{LogPrefix} Could not read '{saveValue.Key}' as {typeof(T).Name}. Returning default value.\n{e.Message}");
+                Debug.LogWarning($"保存する値： {saveValue.Key} を {typeof(T).Name} として読み込めないため、既定値を返します。"
+                    + $"\n{exception.Message}");
+
                 return Copy(saveValue.DefaultValue);
             }
         }
 
 
-        /// <inheritdoc cref="ISaveValues.Set"/>
-        /// <exception cref="ArgumentNullException"><paramref name="saveValue"/>がnullの場合。</exception>
+        /// <inheritdoc />
+        /// <exception cref="ArgumentNullException"><paramref name="saveValue" />がnullの場合。</exception>
         /// <exception cref="InvalidOperationException">
         /// 読み込みが完了する前、メインスレッド以外から呼んだ場合、または同じキー名で別の定義を使った場合。
         /// </exception>
@@ -153,21 +143,21 @@ namespace Tansu
             Register(saveValue);
 
             // JToken.FromObjectはnullを受け取ると例外を投げるため、nullは専用の値で表す。
-            var token = value == null ? JValue.CreateNull() : JToken.FromObject(value, _serializer);
+            JToken token = value == null ? JValue.CreateNull() : JToken.FromObject(value, _serializer);
 
             // 変更がないのに「未保存の変更あり」にならないよう、同じ値なら何もしない。
-            if (_values.TryGetValue(saveValue.Key, out var current) && JToken.DeepEquals(current, token))
+            if (_values.TryGetValue(saveValue.Key, out JToken current) && JToken.DeepEquals(current, token))
             {
                 return;
             }
 
             _values[saveValue.Key] = token;
-            _isDirty = true;
+            HasUnsavedChanges = true;
         }
 
 
-        /// <inheritdoc cref="ISaveValues.Has"/>
-        /// <exception cref="ArgumentNullException"><paramref name="saveValue"/>がnullの場合。</exception>
+        /// <inheritdoc />
+        /// <exception cref="ArgumentNullException"><paramref name="saveValue" />がnullの場合。</exception>
         /// <exception cref="InvalidOperationException">
         /// 読み込みが完了する前、メインスレッド以外から呼んだ場合、または同じキー名で別の定義を使った場合。
         /// </exception>
@@ -181,8 +171,8 @@ namespace Tansu
         }
 
 
-        /// <inheritdoc cref="ISaveValues.Remove"/>
-        /// <exception cref="ArgumentNullException"><paramref name="saveValue"/>がnullの場合。</exception>
+        /// <inheritdoc />
+        /// <exception cref="ArgumentNullException"><paramref name="saveValue" />がnullの場合。</exception>
         /// <exception cref="InvalidOperationException">
         /// 読み込みが完了する前、メインスレッド以外から呼んだ場合、または同じキー名で別の定義を使った場合。
         /// </exception>
@@ -194,57 +184,59 @@ namespace Tansu
 
             if (_values.Remove(saveValue.Key))
             {
-                _isDirty = true;
+                HasUnsavedChanges = true;
             }
         }
 
 
-        /// <inheritdoc cref="ISaveStore.FlushAsync"/>
+        /// <inheritdoc />
         /// <exception cref="InvalidOperationException">読み込みが完了する前、またはメインスレッド以外から呼んだ場合。</exception>
         public Task<FlushResult> FlushAsync()
         {
             ThrowIfNotMainThread();
             ThrowIfNotLoaded();
 
-            var skipResult = GetSkipResult();
+            FlushResult? skipResult = GetSkipResult();
             if (skipResult.HasValue)
             {
                 return Task.FromResult(skipResult.Value);
             }
 
             // 書き込む内容はメインスレッドにいる今のうちに確定させ、別スレッドでは確定した内容を書くだけにする。
-            var snapshot = TakeSnapshot();
+            SaveSnapshot snapshot = TakeSnapshot();
+
             return WriteInBackgroundAsync(snapshot);
         }
 
 
-        /// <inheritdoc cref="ISaveStore.Flush"/>
+        /// <inheritdoc />
         /// <exception cref="InvalidOperationException">読み込みが完了する前、またはメインスレッド以外から呼んだ場合。</exception>
         public FlushResult Flush()
         {
             ThrowIfNotMainThread();
             ThrowIfNotLoaded();
 
-            var skipResult = GetSkipResult();
+            FlushResult? skipResult = GetSkipResult();
             if (skipResult.HasValue)
             {
                 return skipResult.Value;
             }
 
-            var snapshot = TakeSnapshot();
+            SaveSnapshot snapshot = TakeSnapshot();
+
             try
             {
                 WriteSnapshot(snapshot);
                 return FlushResult.Saved;
             }
-            catch (Exception e)
+            catch (Exception exception)
             {
-                return ReportWriteFailure(e);
+                return ReportWriteFailure(exception);
             }
         }
 
 
-        /// <inheritdoc cref="ISaveStore.StartFresh"/>
+        /// <inheritdoc />
         /// <exception cref="InvalidOperationException">読み込みが完了する前、またはメインスレッド以外から呼んだ場合。</exception>
         public void StartFresh()
         {
@@ -252,8 +244,8 @@ namespace Tansu
             ThrowIfNotLoaded();
 
             _values = new JObject();
-            _canSave = true;
-            _isDirty = true;
+            CanSave = true;
+            HasUnsavedChanges = true;
         }
 
 
@@ -261,33 +253,35 @@ namespace Tansu
         {
             LoadResult result;
             JObject values;
+
             try
             {
                 // ファイルの読み込みと解析は時間がかかることがあるため、別スレッドで行う。
                 // メインスレッドからawaitしているので、終わった後はメインスレッドに戻ってくる。
                 (result, values) = await Task.Run(() => ReadFromDisk(FilePath));
             }
-            catch (Exception e)
+            catch (Exception exception)
             {
                 // アクセス権がないなど、ファイルを読むこと自体ができなかった。
-                // 例外として外に出すと、awaitされていない場合に誰にも気付かれないため、ログに出してFailedとして扱う。
-                Debug.LogError($"{LogPrefix} Failed to read save file: {FilePath}\n{e}");
+                // 例外として外に出すと、awaitされていない場合に誰にも気付かれないため、ログに出して失敗として扱う。
+                Debug.LogError($"保存ファイル： {FilePath} を読み込めませんでした。\n{exception}");
                 (result, values) = (LoadResult.Failed, null);
             }
 
             ThrowIfNotBackOnMainThread();
 
             _values = values ?? new JObject();
-            _canSave = result != LoadResult.Failed;
+            CanSave = result != LoadResult.Failed;
             _loadState = LoadState.Loaded;
 
             switch (result)
             {
                 case LoadResult.RestoredFromBackup:
-                    Debug.LogWarning($"{LogPrefix} Save file was broken. Restored from backup: {FilePath}");
+                    Debug.LogWarning($"保存ファイル： {FilePath} が壊れていたため、バックアップから読み込みました。");
                     break;
                 case LoadResult.Failed:
-                    Debug.LogError($"{LogPrefix} Could not load save file. Saving is disabled until StartFresh() is called: {FilePath}");
+                    Debug.LogError($"保存ファイル： {FilePath} を読み込めなかったため、"
+                        + $"{nameof(StartFresh)} を呼ぶまで保存を禁止します。");
                     break;
             }
 
@@ -303,13 +297,14 @@ namespace Tansu
                 // メインスレッドからawaitしているので、終わった後はメインスレッドに戻ってくる。
                 await Task.Run(() => WriteSnapshot(snapshot));
             }
-            catch (Exception e)
+            catch (Exception exception)
             {
                 ThrowIfNotBackOnMainThread();
-                return ReportWriteFailure(e);
+                return ReportWriteFailure(exception);
             }
 
             ThrowIfNotBackOnMainThread();
+
             return FlushResult.Saved;
         }
 
@@ -317,13 +312,15 @@ namespace Tansu
         // 書き込む必要がない場合はその理由を、書き込む必要がある場合はnullを返す。
         private FlushResult? GetSkipResult()
         {
-            if (!_canSave)
+            if (!CanSave)
             {
-                Debug.LogWarning($"{LogPrefix} Saving is disabled because the save file could not be loaded. Call StartFresh() to discard it.");
+                Debug.LogWarning("保存ファイルを読み込めなかったため、保存を禁止しています。"
+                    + $"保存ファイルを破棄して始め直す場合は、{nameof(StartFresh)} を呼んでください。");
+
                 return FlushResult.Disabled;
             }
 
-            if (!_isDirty)
+            if (!HasUnsavedChanges)
             {
                 return FlushResult.NoChanges;
             }
@@ -337,9 +334,10 @@ namespace Tansu
         // メインスレッドがSetで値を書き換えて内容が混ざるのを防ぐため。
         private SaveSnapshot TakeSnapshot()
         {
-            var text = SaveFileFormat.CreateText(_values);
+            string text = SaveFileFormat.CreateText(_values);
             _snapshotVersion++;
-            _isDirty = false;
+            HasUnsavedChanges = false;
+
             return new SaveSnapshot(text, _snapshotVersion);
         }
 
@@ -361,11 +359,12 @@ namespace Tansu
         }
 
 
+        // 書けなかった変更を未保存に戻し、次のFlushで再び書き込みを試みられるようにする。
         private FlushResult ReportWriteFailure(Exception exception)
         {
-            // 書けなかった変更を未保存に戻し、次のFlushで再び書き込みを試みられるようにする。
-            _isDirty = true;
-            Debug.LogError($"{LogPrefix} Failed to write save file: {FilePath}\n{exception}");
+            HasUnsavedChanges = true;
+            Debug.LogError($"保存ファイル： {FilePath} に書き込めませんでした。\n{exception}");
+
             return FlushResult.Failed;
         }
 
@@ -378,12 +377,12 @@ namespace Tansu
                 throw new ArgumentNullException(nameof(saveValue));
             }
 
-            if (_definitions.TryGetValue(saveValue.Key, out var registered))
+            if (_definitions.TryGetValue(saveValue.Key, out object registered))
             {
                 if (!ReferenceEquals(registered, saveValue))
                 {
-                    throw new InvalidOperationException(
-                        $"Key '{saveValue.Key}' is defined more than once. Each key must have exactly one SaveValue definition.");
+                    throw new InvalidOperationException($"キー名： {saveValue.Key} に、別の {nameof(SaveValue<T>)} が定義されています。"
+                        + "キー名ごとに、定義は1つだけにしてください。");
                 }
 
                 return;
@@ -411,7 +410,7 @@ namespace Tansu
         {
             if (Thread.CurrentThread.ManagedThreadId != _mainThreadId)
             {
-                throw new InvalidOperationException("SaveStore must be used from the main thread.");
+                throw new InvalidOperationException($"{nameof(SaveStore)} はメインスレッドから使用してください。");
             }
         }
 
@@ -420,16 +419,18 @@ namespace Tansu
         // 通常は必ず戻ってくるが、万一戻っていなければ、別スレッドから値を書き換える前に止める。
         private void ThrowIfNotBackOnMainThread()
         {
-            if (Thread.CurrentThread.ManagedThreadId != _mainThreadId)
+            if (Thread.CurrentThread.ManagedThreadId == _mainThreadId)
             {
-                var exception = new InvalidOperationException(
-                    "SaveStore did not return to the main thread after a background operation. " +
-                    "The caller may not have a synchronization context.");
-
-                // この例外はTaskの中にしまわれ、awaitされていなければ表に出ないため、先にログにも出しておく。
-                Debug.LogException(exception);
-                throw exception;
+                return;
             }
+
+            var exception = new InvalidOperationException(
+                $"{nameof(SaveStore)} の別スレッドでの処理の後、メインスレッドに戻れませんでした。"
+                + "呼び出し元に同期コンテキストがない可能性があります。");
+
+            // この例外はTaskの中にしまわれ、awaitされていなければ表に出ないため、先にログにも出しておく。
+            Debug.LogException(exception);
+            throw exception;
         }
 
 
@@ -437,7 +438,8 @@ namespace Tansu
         {
             if (_loadState != LoadState.Loaded)
             {
-                throw new InvalidOperationException("Call LoadAsync and wait for it to complete before using SaveStore.");
+                throw new InvalidOperationException(
+                    $"{nameof(LoadAsync)} の完了を待ってから、{nameof(SaveStore)} を使用してください。");
             }
         }
 
@@ -446,10 +448,10 @@ namespace Tansu
         // 別スレッドで実行するため、インスタンスの状態に触れないようstaticにしている。
         private static (LoadResult Result, JObject Values) ReadFromDisk(string filePath)
         {
-            var mainText = AtomicFile.ReadOrNull(filePath);
+            string mainText = AtomicFile.ReadOrNull(filePath);
             if (mainText != null)
             {
-                var mainState = SaveFileFormat.Parse(mainText, out var mainValues);
+                SaveFileState mainState = SaveFileFormat.Parse(mainText, out JObject mainValues);
                 if (mainState == SaveFileState.Valid)
                 {
                     return (LoadResult.Loaded, mainValues);
@@ -463,8 +465,8 @@ namespace Tansu
                 }
             }
 
-            var backupText = AtomicFile.ReadOrNull(AtomicFile.GetBackupPath(filePath));
-            if (backupText != null && SaveFileFormat.Parse(backupText, out var backupValues) == SaveFileState.Valid)
+            string backupText = AtomicFile.ReadOrNull(AtomicFile.GetBackupPath(filePath));
+            if (backupText != null && SaveFileFormat.Parse(backupText, out JObject backupValues) == SaveFileState.Valid)
             {
                 if (mainText != null)
                 {
@@ -491,9 +493,9 @@ namespace Tansu
             {
                 AtomicFile.MoveBrokenFileAside(filePath);
             }
-            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                Debug.LogWarning($"{LogPrefix} Could not move broken save file aside: {filePath}\n{e}");
+                Debug.LogWarning($"壊れた保存ファイル： {filePath} を退避できませんでした。\n{exception}");
             }
         }
 
@@ -517,13 +519,13 @@ namespace Tansu
         }
 
 
-        private static bool IsConversionError(Exception e)
+        private static bool IsConversionError(Exception exception)
         {
-            return e is JsonException
-                || e is FormatException
-                || e is InvalidCastException
-                || e is OverflowException
-                || e is ArgumentException;
+            return exception is JsonException
+                or FormatException
+                or InvalidCastException
+                or OverflowException
+                or ArgumentException;
         }
     }
 }

@@ -5,7 +5,7 @@ Unity 向けの、シンプルで壊れにくいセーブライブラリです�
 
 *A simple, crash-safe key-value save library for Unity.*
 
-> 現在は v0.1.0 の開発版です。v1.0.0 になるまでは、API が変わる可能性があります。
+> 現在は v0.2.0 の開発版です。v1.0.0 になるまでは、API が変わる可能性があります。
 
 ### 名前の由来
 
@@ -80,7 +80,7 @@ public static class GameSaveValues
 `SaveStore` を作り、`LoadAsync` で保存ファイルを読み込みます。読み込みが終わるまで、ほかの操作はできません。
 
 ```csharp
-SaveStore store = new SaveStore();       // persistentDataPath/save.json に保存する
+var store = new SaveStore();   // persistentDataPath/save.json に保存する
 LoadResult result = await store.LoadAsync();
 ```
 
@@ -229,11 +229,9 @@ switch (result)
     case LoadResult.Loaded:
     case LoadResult.NotFound:
         break;
-
     case LoadResult.RestoredFromBackup:
         // 直前の保存は失われたが、1 つ前の状態で続けられる
         break;
-
     case LoadResult.Failed:
         // 保存は禁止されている。プレイヤーに確認してから StartFresh で始め直す、など
         break;
@@ -305,9 +303,9 @@ private void OnApplicationQuit()
 `SaveStore` の生成時にファイル名を指定すると、保存ファイルを分けられます。フォルダを含めることもできます。
 
 ```csharp
-SaveStore settings = new SaveStore("settings.json");
-SaveStore slot1 = new SaveStore("slots/slot1.json");
-SaveStore slot2 = new SaveStore("slots/slot2.json");
+var settings = new SaveStore("settings.json");
+var slot1 = new SaveStore("slots/slot1.json");
+var slot2 = new SaveStore("slots/slot2.json");
 ```
 
 設定とゲームの進行度を分けたり、セーブスロットを作ったりするときに使います。
@@ -381,8 +379,8 @@ public sealed class InMemorySaveValues : ISaveValues
 ```
 
 ```csharp
-InMemorySaveValues saveValues = new InMemorySaveValues();
-CoinWallet wallet = new CoinWallet(saveValues);
+var saveValues = new InMemorySaveValues();
+var wallet = new CoinWallet(saveValues);
 
 wallet.Add(10);
 
@@ -463,6 +461,7 @@ Assert.AreEqual(10, saveValues.Get(GameSaveValues.Coins));
 - **Get の負荷**：`Get` は毎回値を作り直すため、毎フレーム呼ぶ用途には向きません。読み込んだ値は手元に持っておき、変更したときに `Set` してください。
 - **同じ値の Set**：今と同じ値を `Set` した場合は、変更として扱いません。
 - **型が合わない値**：保存されている値を指定した型で読めない場合（型を変更した、ファイルを手で編集した、など）は、警告を出して既定値を返します。
+- **Unity の型の読み込み**：JSON にない成分は既定値になります（`Color` のアルファは 1、`Color32` のアルファは 255、`Quaternion` は無回転）。`Vector2Int`・`Vector3Int`・`Color32` の成分に小数や範囲外の値がある場合は、四捨五入して範囲内に収めます。
 - **書き込みの順番**：`FlushAsync` の書き込み中に `Flush` を呼んでも、古い内容で新しい内容を上書きすることはありません。`Flush` は、進行中の書き込みが終わるまで待ってから書き込みます。
 - **IL2CPP**：保存するクラスがコードの削減（Managed Stripping）で取り除かれると、読み込めなくなる場合があります。その場合は、クラスに `[Preserve]` を付けるか、`link.xml` で保持してください。
 - **エディタとビルドの保存先**：`Application.persistentDataPath` を使うため、Windows や macOS では、エディタとビルドで同じ保存ファイルを使います。

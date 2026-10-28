@@ -4,7 +4,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 
-namespace Tansu.Internal
+namespace Tansu
 {
     /// <summary>
     /// 保存ファイルの中身（JSON）の作成と解析を行う。
@@ -24,7 +24,6 @@ namespace Tansu.Internal
     {
         // このアプリが書き込むファイル形式のバージョン。形式を変えたら1つ上げる。
         private const int CurrentVersion = 1;
-
         private const string VersionKey = "version";
         private const string ValuesKey = "values";
 
@@ -33,7 +32,7 @@ namespace Tansu.Internal
         /// 値の一覧から、ファイルに書き込むテキストを作る。
         /// </summary>
         /// <param name="values">キー名ごとの値の一覧。</param>
-        /// <returns>ファイルに書き込むテキスト。</returns>
+        /// <returns>ファイルに書き込むテキストを返す。</returns>
         public static string CreateText(JObject values)
         {
             using var stringWriter = new StringWriter(CultureInfo.InvariantCulture);
@@ -59,8 +58,8 @@ namespace Tansu.Internal
         /// ファイルのテキストを解析し、値の一覧を取り出す。
         /// </summary>
         /// <param name="text">ファイルの中身。</param>
-        /// <param name="values">解析に成功した場合は値の一覧。それ以外はnull。</param>
-        /// <returns>ファイルの状態。</returns>
+        /// <param name="values">取り出した値の一覧。解析に成功しなかった場合はnull。</param>
+        /// <returns>ファイルの状態を返す。</returns>
         public static SaveFileState Parse(string text, out JObject values)
         {
             values = null;
@@ -82,17 +81,23 @@ namespace Tansu.Internal
                 return SaveFileState.Broken;
             }
 
-            if (!(root[VersionKey] is JValue version) || version.Type != JTokenType.Integer)
+            if (root[VersionKey] is not JValue version || version.Type != JTokenType.Integer)
             {
                 return SaveFileState.Broken;
             }
 
-            if ((long)version > CurrentVersion)
+            // longに収まらないほど大きな値は、新しい形式とも判断できないため、壊れているものとして扱う。
+            if (version.Value is not long versionNumber)
+            {
+                return SaveFileState.Broken;
+            }
+
+            if (versionNumber > CurrentVersion)
             {
                 return SaveFileState.TooNew;
             }
 
-            if (!(root[ValuesKey] is JObject parsedValues))
+            if (root[ValuesKey] is not JObject parsedValues)
             {
                 return SaveFileState.Broken;
             }

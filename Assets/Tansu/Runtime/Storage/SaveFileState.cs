@@ -1,4 +1,4 @@
-namespace Tansu.Internal
+namespace Tansu
 {
     /// <summary>
     /// 保存ファイルの解析結果を表す。
