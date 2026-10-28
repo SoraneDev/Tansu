@@ -9,7 +9,7 @@ namespace Tansu
     /// </summary>
     /// <remarks>
     /// アルファが欠けている場合に透明にならないよう、アルファの既定値を255（不透明）にしている。
-    /// 範囲外の値や小数は、0から255の整数に丸める。
+    /// 小数や範囲外の値は、四捨五入して0から255の範囲に収める。
     /// </remarks>
     internal sealed class Color32Converter : ComponentStructConverter<Color32>
     {
@@ -52,7 +52,9 @@ namespace Tansu
 
         private static byte ToByte(double component)
         {
-            return (byte)Math.Clamp(Math.Round(component), byte.MinValue, byte.MaxValue);
+            // 引数を指定しないMath.Roundは、.5を偶数側に丸める（2.5は2になる）ため、0から遠い側に丸めて四捨五入にする。
+            double rounded = Math.Round(component, MidpointRounding.AwayFromZero);
+            return (byte)Math.Clamp(rounded, byte.MinValue, byte.MaxValue);
         }
     }
 }

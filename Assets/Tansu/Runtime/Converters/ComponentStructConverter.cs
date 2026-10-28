@@ -131,7 +131,9 @@ namespace Tansu
         /// <remarks>ファイルを手で編集して小数や範囲外の値が入っていても、読み込めるようにするため。</remarks>
         protected static int ToInt(double component)
         {
-            return (int)Math.Clamp(Math.Round(component), int.MinValue, int.MaxValue);
+            // 引数を指定しないMath.Roundは、.5を偶数側に丸める（2.5は2になる）ため、0から遠い側に丸めて四捨五入にする。
+            double rounded = Math.Round(component, MidpointRounding.AwayFromZero);
+            return (int)Math.Clamp(rounded, int.MinValue, int.MaxValue);
         }
 
 
