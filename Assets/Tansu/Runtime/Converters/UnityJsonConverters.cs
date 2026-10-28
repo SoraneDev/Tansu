@@ -2,16 +2,17 @@ using System.Collections.Generic;
 using Newtonsoft.Json;
 
 
-namespace Tansu.Converters
+namespace Tansu
 {
     /// <summary>
-    /// Unityの基本的な値型を扱うコンバーターの一覧。
+    /// Unityの基本的な値型を扱うコンバーターを提供する。
     /// </summary>
-    public static class UnityJsonConverters
+    internal static class UnityJsonConverters
     {
         /// <summary>
-        /// すべてのコンバーターの新しいリストを生成する。
+        /// すべてのコンバーターを、新しいリストにまとめて生成する。
         /// </summary>
+        /// <returns>生成したコンバーターのリストを返す。</returns>
         public static List<JsonConverter> CreateAll()
         {
             return new List<JsonConverter>

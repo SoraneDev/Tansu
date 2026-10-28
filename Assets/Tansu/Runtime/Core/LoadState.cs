@@ -1,4 +1,4 @@
-namespace Tansu.Internal
+namespace Tansu
 {
     /// <summary>
     /// 読み込み処理の進み具合を表す。
